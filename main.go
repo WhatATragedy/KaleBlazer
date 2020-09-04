@@ -19,8 +19,6 @@ import (
 	"compress/bzip2"
 	"io/ioutil"
 	"os/exec"
-
-
 )
 
 func main() {
@@ -34,7 +32,7 @@ func main() {
 		latestCollection := LatestCollection(collectorName, archiveURL)
 		fmt.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
 		go getFile(&wg, collectorName, archiveURL, latestCollection)
-		if index > 4 {
+		if index > 15 {
 			break
 		}
 	}
