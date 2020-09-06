@@ -19,31 +19,35 @@ import (
 	"compress/bzip2"
 	"io/ioutil"
 	"os/exec"
+	"log"
+	"ribSnatcher/handlers"
 )
 
 func main() {
-	archiveURL := "http://archive.routeviews.org/"
-	collectorUrl := "http://www.routeviews.org/routeviews/index.php/collectors/"
-	collectors := GetCollectors(collectorUrl)
-	fmt.Println("Finished Getting Collectors")
-	var wg sync.WaitGroup
-	for index, collectorName := range collectors {
-		wg.Add(1)
-		latestCollection := LatestCollection(collectorName, archiveURL)
-		fmt.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
-		go getFile(&wg, collectorName, archiveURL, latestCollection)
-		if index > 15 {
-			break
-		}
-	}
-	wg.Wait()
-	fmt.Println("Done Collecting Files...")
-	fmt.Println("Unzipping Directory...")
-	unzipFiles("ribs/")
-	fmt.Println("Directory Unzipped")
-	fmt.Println("Init BGP Scanner")
-	collectBGPScanner("ribs/")
-	fmt.Println("Done.")
+	l := log.New(os.Stdout, "Kale-Blazer ", log.LstdFlags)
+	// archiveURL := "http://archive.routeviews.org/"
+	// collectorUrl := "http://www.routeviews.org/routeviews/index.php/collectors/"
+	// collectors := GetCollectors(collectorUrl)
+	// fmt.Println("Finished Getting Collectors")
+	// var wg sync.WaitGroup
+	// for _, collectorName := range collectors {
+	// 	wg.Add(1)
+	// 	latestCollection := LatestCollection(collectorName, archiveURL)
+	// 	fmt.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
+	// 	go getFile(&wg, collectorName, archiveURL, latestCollection)
+	// }
+	// wg.Wait()
+	// fmt.Println("Done Collecting Files...")
+	// fmt.Println("Unzipping Directory...")
+	// unzipFiles("ribs/")
+	// fmt.Println("Directory Unzipped")
+	// fmt.Println("Init BGP Scanner")
+	// collectBGPScanner("ribs/")
+	// fmt.Println("Done.")
+	postgresConnector := handlers.NewPostgresConnector(l)
+	fmt.Println(postgresConnector)
+	postgresConnector.CreateRIBTable()
+	postgresConnector.InsertRIBFile("/home/ubuntu/go/src/ribSnatcher/parsed_ribs/route-views.amsix-rib.20200904.1600")
 }
 //todo add function to list directory and return a slice of files
 
