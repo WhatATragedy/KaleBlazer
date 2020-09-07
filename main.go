@@ -44,10 +44,15 @@ func main() {
 	// fmt.Println("Init BGP Scanner")
 	// collectBGPScanner("ribs/")
 	// fmt.Println("Done.")
-	postgresConnector := handlers.NewPostgresConnector(l)
-	fmt.Println(postgresConnector)
-	postgresConnector.CreateRIBTable()
-	postgresConnector.ConsumeRIBFile("/home/ubuntu/go/src/ribSnatcher/parsed_ribs/route-views.amsix-rib.20200904.1600")
+	// postgresConnector := handlers.NewPostgresConnector(l)
+	// fmt.Println(postgresConnector)
+	// postgresConnector.CreateRIBTable()
+	// postgresConnector.ConsumeRIBFile("/home/ubuntu/go/src/ribSnatcher/parsed_ribs/route-views.amsix-rib.20200904.1600")
+	//asNames := handlers.NewASNamesHandler(l)
+	_, err := handlers.GetASNames(l)
+	if err != nil {
+		panic(err)
+	}
 }
 //todo add function to list directory and return a slice of files
 
@@ -113,9 +118,6 @@ func unzipFiles(directory string){
 		go unzipFile(&wg, "ribs/", fmt.Sprintf("%v%v", directory, f.Name()))
 	}
 	wg.Wait()
-}
-func mrtParseFile(){
-
 }
 func getFile(wg *sync.WaitGroup, collectorName string, url string, collectionTime time.Time) {
 	// Get the data

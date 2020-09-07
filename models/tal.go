@@ -2,12 +2,13 @@ package models
 import (
 	"time"
 )
-type talEntry struct {
+type TALEntry struct {
 	Prefix string
 	AutonomousSystem int
-	SourceDatetime *time.Time
+	SourceDatetime *time.Time 
 }
-type tal struct {
+
+type TAL struct {
 	Name string
 	Datetime *time.Time
 }
