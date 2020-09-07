@@ -47,7 +47,7 @@ func main() {
 	postgresConnector := handlers.NewPostgresConnector(l)
 	fmt.Println(postgresConnector)
 	postgresConnector.CreateRIBTable()
-	postgresConnector.InsertRIBFile("/home/ubuntu/go/src/ribSnatcher/parsed_ribs/route-views.amsix-rib.20200904.1600")
+	postgresConnector.ConsumeRIBFile("/home/ubuntu/go/src/ribSnatcher/parsed_ribs/route-views.amsix-rib.20200904.1600")
 }
 //todo add function to list directory and return a slice of files
 
