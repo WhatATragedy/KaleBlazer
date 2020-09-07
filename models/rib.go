@@ -10,3 +10,7 @@ type RIBEntry struct {
 	SourceRIB string
 	SourceDatetime *time.Time
 }
+type RIB struct {
+	Name string
+	Datetime *time.Time
+}

@@ -127,28 +127,6 @@ func (postgresConnector *PostgresConnector) ConsumeRIBFile(filename string) (err
 	}
 	return err
 }
-
-// func (postgresConnector *PostgresConnector) BulkInsert(ribRows []*models.RIBEntry) error {
-//     valueStrings := make([]string, 0, len(ribRows))
-//     valueArgs := make([]interface{}, 0, len(ribRows) * 6)
-//     for _, post := range ribRows {
-// 		valueStrings = append(valueStrings, "($1, $2, $3, $4, $5, $6)")
-// 		valueArgs = append(valueArgs, post.Prefix)
-//         valueArgs = append(valueArgs, post.AutonomousSystemPath)
-// 		valueArgs = append(valueArgs, post.OriginatingIP)
-// 		valueArgs = append(valueArgs, post.OriginatingASN)
-// 		valueArgs = append(valueArgs, post.SourceRIB)
-// 		valueArgs = append(valueArgs, post.SourceDatetime)
-//     }
-//     stmt := fmt.Sprintf("INSERT INTO ribs (Prefix, ASPath, OriginatingIP, OriginatingASN, SourceRIB, OriginatingDatetime) VALUES %s", 
-// 						strings.Join(valueStrings, ","))
-// 	fmt.Println(stmt)
-// 	_, err := postgresConnector.db.Exec(stmt, valueArgs...)
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	return err
-// }
 func (postgresConnector *PostgresConnector) BulkInsert(ribRows []*models.RIBEntry) error {
 	txn, err := postgresConnector.db.Begin()
 	if err != nil {
