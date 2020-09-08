@@ -3,7 +3,7 @@ import (
 	"log"
 	"net/http"
 	"fmt"
-	"ribSnatcher/models"
+	"kaleblazer/models"
 	"bufio"
 	"strings"
 	"strconv"

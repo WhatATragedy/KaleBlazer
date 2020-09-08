@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"net/http"
-	"ribSnatcher/models"
+	"kaleblazer/models"
 	"bufio"
 	"strconv"
 	"github.com/lib/pq"
