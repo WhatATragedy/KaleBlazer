@@ -5,7 +5,9 @@ import (
 type TALEntry struct {
 	Prefix string
 	AutonomousSystem int
-	SourceDatetime *time.Time 
+	ValidFrom *time.Time 
+	SourceRIR string
+	SourceDate *time.Time
 }
 
 type TAL struct {

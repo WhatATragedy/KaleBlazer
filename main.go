@@ -49,10 +49,12 @@ func main() {
 	// postgresConnector.CreateRIBTable()
 	// postgresConnector.ConsumeRIBFile("/home/ubuntu/go/src/ribSnatcher/parsed_ribs/route-views.amsix-rib.20200904.1600")
 	//asNames := handlers.NewASNamesHandler(l)
-	_, err := handlers.GetASNames(l)
-	if err != nil {
-		panic(err)
-	}
+	// _, err := handlers.GetASNames(l)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	tals := handlers.NewTalHandler(l)
+	tals.ConsumeTals([]string{}, nil)
 }
 //todo add function to list directory and return a slice of files
 
