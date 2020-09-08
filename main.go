@@ -15,34 +15,13 @@ import (
 
 func main() {
 	l := log.New(os.Stdout, "Kale-Blazer ", log.LstdFlags)
-	// archiveURL := "http://archive.routeviews.org/"
-	// collectorUrl := "http://www.routeviews.org/routeviews/index.php/collectors/"
-	// collectors := GetCollectors(collectorUrl)
-	// fmt.Println("Finished Getting Collectors")
-	// var wg sync.WaitGroup
-	// for _, collectorName := range collectors {
-	// 	wg.Add(1)
-	// 	latestCollection := LatestCollection(collectorName, archiveURL)
-	// 	fmt.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
-	// 	go getFile(&wg, collectorName, archiveURL, latestCollection)
-	// }
-	// wg.Wait()
-	// fmt.Println("Done Collecting Files...")
-	// fmt.Println("Unzipping Directory...")
-	// unzipFiles("ribs/")
-	// fmt.Println("Directory Unzipped")
-	// fmt.Println("Init BGP Scanner")
-	// collectBGPScanner("ribs/")
-	// fmt.Println("Done.")
-	// postgresConnector := handlers.NewPostgresConnector(l)
-	// fmt.Println(postgresConnector)
-	// postgresConnector.CreateRIBTable()
-	// postgresConnector.ConsumeRIBFile("/home/ubuntu/go/src/ribSnatcher/parsed_ribs/route-views.amsix-rib.20200904.1600")
+	rib := handlers.NewRibHandler(l)
+	rib.GetRibs()
 	//asNames := handlers.NewASNamesHandler(l)
-	// _, err := handlers.GetASNames(l)
-	// if err != nil {
-	// 	panic(err)
-	// }
+	_, err := handlers.GetASNames(l)
+	if err != nil {
+		panic(err)
+	}
 	tals := handlers.NewTalHandler(l)
 	tals.ConsumeTals([]string{}, nil)
 }

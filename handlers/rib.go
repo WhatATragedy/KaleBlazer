@@ -57,14 +57,17 @@ func (ribHandler *RibHandler) connectPostgres(l *log.Logger) *PostgresConnector 
 	return postgresConnector
 }
 func (ribHandler *RibHandler) GetRibs(){
-	collectors := ribHandler.GetCollectors()
+	ribHandler.GetCollectors()
 	fmt.Println("Finished Getting Collectors")
 	var wg sync.WaitGroup
-	for _, collectorName := range collectors {
+	for i, collectorName := range ribHandler.collectors {
 		wg.Add(1)
 		latestCollection := ribHandler.LatestCollection(collectorName)
 		fmt.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
 		go ribHandler.getFile(&wg, collectorName, latestCollection)
+		if i > 5 {
+			break
+		}
 	}
 	wg.Wait()
 	fmt.Println("Done Collecting Files...")
@@ -78,7 +81,6 @@ func (ribHandler *RibHandler) GetRibs(){
 	ribHandler.createPostgresTable(postgresConnector)
 	ribHandler.ConsumeRIBFile(postgresConnector, "/home/ubuntu/go/src/ribSnatcher/parsed_ribs/route-views.amsix-rib.20200904.1600")
 }
-
 func (ribHandler *RibHandler) collectBGPScanner(inputDirectory string) {
 	fmt.Println("Collecting BPG Scanner Tasks")
 	files, err := ioutil.ReadDir(inputDirectory)
@@ -144,6 +146,7 @@ func (ribHandler *RibHandler) unzipFiles(directory string){
 }
 func (ribHandler *RibHandler) getFile(wg *sync.WaitGroup, collectorName string, collectionTime time.Time) {
 	// Get the data
+	//example request http://archive.routeviews.org/route-views.amsix/bgpdata/2020.09/RIBS/rib.20200901.0000.bz2
 	defer wg.Done()
 	fmt.Printf("Collecting %v...\n", collectorName)
 	collectionMonth := collectionTime.Format("2006.01")
@@ -251,6 +254,7 @@ func (ribHandler *RibHandler) GetCollectors() []string {
 		fmt.Println("Visited", r.Request.URL)
 	})
 	c.Visit(ribHandler.collectorURL)
+	ribHandler.collectors = collectors
 	return collectors
 }
 func (ribHandler *RibHandler) ConsumeRIBFile(postgresConnector *PostgresConnector, filename string) (error) {
