@@ -1,35 +1,36 @@
-
 package handlers
+
 import (
-	"log"
-	"time"
-	"github.com/gocolly/colly"
-	"fmt"
-	"strings"
-	"net/http"
-	"kaleblazer/models"
 	"bufio"
-	"strconv"
-	"github.com/lib/pq"
-	"sync"
-	"os/exec"
-	"os"
 	"compress/bzip2"
-	"io/ioutil"
+	"fmt"
 	"io"
+	"kaleblazer/models"
+	"log"
 	"net"
-	
+	"net/http"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/gocolly/colly"
+	"github.com/lib/pq"
 )
+
 type RibHandler struct {
-	l *log.Logger
-	archiveURL string
+	l            *log.Logger
+	archiveURL   string
 	collectorURL string
-	collectors []string
+	collectors   []string
 }
+
 func NewRibHandler(l *log.Logger) *RibHandler {
 	return &RibHandler{
-		l: l,
-		archiveURL: "http://archive.routeviews.org/",
+		l:            l,
+		archiveURL:   "http://archive.routeviews.org/",
 		collectorURL: "http://www.routeviews.org/routeviews/index.php/collectors/",
 	}
 }
@@ -56,137 +57,127 @@ func (ribHandler *RibHandler) connectPostgres(l *log.Logger) *PostgresConnector 
 	postgresConnector := NewPostgresConnector(l)
 	return postgresConnector
 }
-func (ribHandler *RibHandler) GetRibs(){
+func (ribHandler *RibHandler) GetRibs() {
 	ribHandler.GetCollectors()
-	fmt.Println("Finished Getting Collectors")
+	ribHandler.l.Println("Finished Getting Collectors")
 	postgresConnector := ribHandler.connectPostgres(ribHandler.l)
 	ribHandler.createPostgresTable(postgresConnector)
+	postgresChan := make(chan string)
+	//Going to start the BGPScanner goroutine as when getFile pushes to channel this goroutine will start running.
+	parseJobChan := make(chan string)
+	//Here I spawn 5 worker tasks
+	ribHandler.createWorkerPool(5, parseJobChan, postgresChan)
 	var wg sync.WaitGroup
-	compChan := make(chan string)
 	for i, collectorName := range ribHandler.collectors {
-		wg.Add(1)
 		latestCollection := ribHandler.LatestCollection(collectorName)
-		fmt.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
-		go ribHandler.getFile(&wg, collectorName, latestCollection)
+		ribHandler.l.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
+		go ribHandler.getFile(&wg, collectorName, latestCollection, parseJobChan)
 		if i > 5 {
 			break
 		}
 	}
 	wg.Wait()
-	fmt.Println("Done Collecting Files...")
-	fmt.Println("Unzipping Directory...")
-	ribHandler.unzipFiles("ribs/")
-	fmt.Println("Directory Unzipped")
-	fmt.Println("Init BGP Scanner")
-	ribHandler.collectBGPScanner("ribs/", compChan)
-	fmt.Println("Done Parsing..")
-	fmt.Println("Sending to Postgres")
+	ribHandler.l.Printf("Wrote %v Tasks..\n", i)
+	//close the channel when all files have been collected as filepaths should have been pushed
+	close(parseJobChan)
+	ribHandler.l.Println("Done Collecting Files...")
+
 	for elem := range compChan {
 		ribHandler.ConsumeRIBFile(postgresConnector, elem)
 	}
 }
-func (ribHandler *RibHandler) collectBGPScanner(inputDirectory string, completedChannel chan string) {
-	fmt.Println("Collecting BPG Scanner Tasks")
-	files, err := ioutil.ReadDir(inputDirectory)
-	if err != nil {
-        fmt.Println(err)
-	}
+func (ribHandler *RibHandler) createWorkerPool(noOfWorkers int, jobChannel chan string, postgresChan chan string) {
 	var wg sync.WaitGroup
-    for _, f := range files {
-		wg.Add(1)
-		go ribHandler.spawnBGPScanner(&wg, fmt.Sprintf("%v%v", inputDirectory, f.Name()), fmt.Sprintf("parsed_ribs/%v", f.Name()), completedChannel)
+	for i := 0; i < noOfWorkers; i++ {
+		go parseBGPFile(i, &wg, jobChannel, postgresChan)
 	}
+	wg.Add(len(jobChannel))
 	wg.Wait()
 }
-func (ribHandler *RibHandler) spawnBGPScanner(wg *sync.WaitGroup, inputFilepath string, outputFilepath string, completedChannel chan string){
-	defer wg.Done()
-	fmt.Println("Spawned a BGP Scanner...")
+func (ribHandler *RibHandler) parseBGPFile(id int, wg *sync.WaitGroup, jobChannel <-chan string, postgresChan chan<- string) {
+	for task := range jobChannel {
+		ribHandler.l.Printf("Worker %v Started Job %v\n", id, task)
+		unzippedFile := ribHandler.unzipFile(task)
+		ribHandler.spawnBGPScanner(unzippedFile, fmt.Sprintf("parsed_ribs/%v", unzippedFile), postgresChan)
+	}
+}
+func (ribHandler *RibHandler) spawnBGPScanner(inputFilepath string, outputFilepath string, postgresChan chan string) {
+	ribHandler.l.Printf("Spawned a BGP Scanner For %v\n", inputFilepath)
 	cmd := exec.Command("/home/ubuntu/bgpscanner/build/bgpscanner", inputFilepath)
 	cmd.Stderr = os.Stderr
 	outfile, err := os.Create(outputFilepath)
-    if err != nil {
-        panic(err)
-    }
-    defer outfile.Close()
-    cmd.Stdout = outfile
+	if err != nil {
+		panic(err)
+	}
+	defer outfile.Close()
+	cmd.Stdout = outfile
 
-    err = cmd.Start(); if err != nil {
-        panic(err)
-    }
+	err = cmd.Start()
+	if err != nil {
+		panic(err)
+	}
 	cmd.Wait()
-	completedChannel <- inputFilepath
-	
+	postgresChan <- outputFilepath
+
 }
-func (ribHandler *RibHandler) unzipFile(wg *sync.WaitGroup, outDir string, inputFilepath string) {
+func (ribHandler *RibHandler) unzipFile(inputFilepath string) string {
 	//TODO Remove the old bzip file when done
-	defer wg.Done()
 	inputFile, err := os.OpenFile(inputFilepath, 0, 0)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(inputFilepath)
+	ribHandler.l.Println(inputFilepath)
 	inputReader := bzip2.NewReader(inputFile)
 	out, err := os.Create(strings.Replace(inputFilepath, ".bz2", "", -1))
 	if err != nil {
-		fmt.Println(err)
+		ribHandler.l.Println(err)
 	}
 	defer out.Close()
 	// Write the body to file
 	_, err = io.Copy(out, inputReader)
 	if err != nil {
-		fmt.Println(err)
+		ribHandler.l.Println(err)
 	}
 	os.Remove(inputFilepath)
+	return out
 }
-func (ribHandler *RibHandler) unzipFiles(directory string){
-	files, err := ioutil.ReadDir(directory)
-	if err != nil {
-        fmt.Println(err)
-	}
-	var wg sync.WaitGroup
-    for _, f := range files {
-		wg.Add(1)
-		go ribHandler.unzipFile(&wg, "ribs/", fmt.Sprintf("%v%v", directory, f.Name()))
-	}
-	wg.Wait()
-}
-func (ribHandler *RibHandler) getFile(wg *sync.WaitGroup, collectorName string, collectionTime time.Time) {
+func (ribHandler *RibHandler) getFile(wg *sync.WaitGroup, collectorName string, collectionTime time.Time, collectedFileChan chan string) {
 	// Get the data
 	//example request http://archive.routeviews.org/route-views.amsix/bgpdata/2020.09/RIBS/rib.20200901.0000.bz2
-	defer wg.Done()
-	fmt.Printf("Collecting %v...\n", collectorName)
+	ribHandler.l.Printf("Collecting %v...\n", collectorName)
 	collectionMonth := collectionTime.Format("2006.01")
-	fileName := fmt.Sprintf("rib.%v.bz2", collectionTime.Format("20060102.1504"))	
-	fullURL := 	fmt.Sprintf("%v%v/bgpdata/%v/RIBS/%v",
-		ribHandler.archiveURL, 
-		collectorName, 
+	fileName := ribHandler.l.Sprintf("rib.%v.bz2", collectionTime.Format("20060102.1504"))
+	fullURL := ribHandler.l.Sprintf("%v%v/bgpdata/%v/RIBS/%v",
+		ribHandler.archiveURL,
+		collectorName,
 		collectionMonth,
 		fileName,
 	)
 	resp, err := http.Get(fullURL)
 	if err != nil {
-		fmt.Println(err)
+		ribHandler.l.Println(err)
 	}
 	defer resp.Body.Close()
 	// Create the file
-	filepath := fmt.Sprintf("ribs/%v-%v", collectorName, fileName)
+	filepath := ribHandler.l.Sprintf("ribs/%v-%v", collectorName, fileName)
 	out, err := os.Create(filepath)
 	if err != nil {
-		fmt.Println(err)
+		ribHandler.l.Println(err)
 	}
 	defer out.Close()
 	// Write the body to file
 	_, err = io.Copy(out, resp.Body)
 	if err != nil {
-		fmt.Println(err)
+		ribHandler.l.Println(err)
 	}
+	completedFileChan <- filepath
 }
 func (ribHandler *RibHandler) LatestCollection(collectorName string) time.Time {
 	//example url http://archive.routeviews.org/route-views.amsix/bgpdata/2020.09/RIBS/rib.20200901.0000.bz2
 	layout := "20060102.1504"
 	latestCollectionMonth := ribHandler.LatestMonth(collectorName)
 	collectorDates := []time.Time{}
-	url := fmt.Sprintf("%v%v/bgpdata/%v/RIBS/", ribHandler.archiveURL, collectorName, fmt.Sprintf(latestCollectionMonth.Format("2006.01")))
+	url := ribHandler.l.Sprintf("%v%v/bgpdata/%v/RIBS/", ribHandler.archiveURL, collectorName, ribHandler.l.Sprintf(latestCollectionMonth.Format("2006.01")))
 	c := colly.NewCollector()
 	// On every a element which has href attribute call callback
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
@@ -199,7 +190,7 @@ func (ribHandler *RibHandler) LatestCollection(collectorName string) time.Time {
 		}
 	})
 	c.Visit(url)
-	if len(collectorDates) == 0{
+	if len(collectorDates) == 0 {
 		return time.Time{}
 	} else {
 		return collectorDates[len(collectorDates)-1]
@@ -209,7 +200,7 @@ func (ribHandler *RibHandler) LatestCollection(collectorName string) time.Time {
 func (ribHandler *RibHandler) LatestMonth(collectorName string) time.Time {
 	layout := "2006.01"
 	collectorDates := []time.Time{}
-	url := fmt.Sprintf("%v%v/bgpdata/", ribHandler.archiveURL, collectorName)
+	url := ribHandler.l.Sprintf("%v%v/bgpdata/", ribHandler.archiveURL, collectorName)
 	c := colly.NewCollector()
 	// On every a element which has href attribute call callback
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
@@ -219,7 +210,7 @@ func (ribHandler *RibHandler) LatestMonth(collectorName string) time.Time {
 		}
 	})
 	c.Visit(url)
-	if len(collectorDates) == 0{
+	if len(collectorDates) == 0 {
 		return time.Time{}
 	} else {
 		return collectorDates[len(collectorDates)-1]
@@ -234,8 +225,8 @@ func (ribHandler *RibHandler) GetCollectors() []string {
 			//this will return the row in the table, then need to get more granular and get the elements in columns
 			row.ForEach("td", func(_ int, column *colly.HTMLElement) {
 				val := ""
-				if strings.Contains(column.Text, "routeviews"){
-					if strings.Contains(column.Text, "\n"){
+				if strings.Contains(column.Text, "routeviews") {
+					if strings.Contains(column.Text, "\n") {
 						//this is probably the oregon one so trim newline, split and get first
 						element := strings.Trim(column.Text, "\n")
 						val = strings.Split(element, "\n")[0]
@@ -254,34 +245,34 @@ func (ribHandler *RibHandler) GetCollectors() []string {
 	})
 	// Before making a request print "Visiting ..."
 	c.OnRequest(func(r *colly.Request) {
-		fmt.Println("Visiting", ribHandler.collectorURL)
+		ribHandler.l.Println("Visiting", ribHandler.collectorURL)
 	})
 	c.OnResponse(func(r *colly.Response) {
-		fmt.Println("Visited", r.Request.URL)
+		ribHandler.l.Println("Visited", r.Request.URL)
 	})
 	c.Visit(ribHandler.collectorURL)
 	ribHandler.collectors = collectors
 	return collectors
 }
-func (ribHandler *RibHandler) ConsumeRIBFile(postgresConnector *PostgresConnector, filename string) (error) {
+func (ribHandler *RibHandler) ConsumeRIBFile(postgresConnector *PostgresConnector, filename string) error {
 	//open the file
 	//after 10000 lines have been batched send the statement
 	//loop until finished
 	var ribRows []*models.RIBEntry = nil
 	datetimeLayout := "20060102.1504"
 	file, err := os.Open(filename)
-    if err != nil {
-        log.Fatal(err)
-    }
+	if err != nil {
+		log.Fatal(err)
+	}
 	defer file.Close()
 	fileVals := strings.Split(filename, "/")
-	sourceFile := fileVals[len(fileVals) - 1]
+	sourceFile := fileVals[len(fileVals)-1]
 	//datetime and source rib from the filename
 	tempSlice := strings.Split(sourceFile, ".")
 	nameSlice := tempSlice[0:2]
 	datetimeSlice := tempSlice[2:4]
-	// fmt.Println(nameSlice)
-	// fmt.Println(datetimeSlice)
+	// ribHandler.l.Println(nameSlice)
+	// ribHandler.l.Println(datetimeSlice)
 	sourceRIB := strings.Join(nameSlice, ".")
 	originatingDatetimeString := strings.Join(datetimeSlice, ".")
 	originatingDatetime, err := time.Parse(datetimeLayout, originatingDatetimeString)
@@ -290,19 +281,19 @@ func (ribHandler *RibHandler) ConsumeRIBFile(postgresConnector *PostgresConnecto
 	}
 	scanner := bufio.NewScanner(file)
 	index := 0
-    for scanner.Scan() {
+	for scanner.Scan() {
 		val := strings.Split(scanner.Text(), "|")
-		// fmt.Println(val)
-		// fmt.Println(len(val))
+		// ribHandler.l.Println(val)
+		// ribHandler.l.Println(len(val))
 		// for _, item := range val {
-		// 	fmt.Println(item)
+		// 	ribHandler.l.Println(item)
 		// }
 		//TODO handles AS_SET Attributes better, just dropping them at the moment
 		prefix := val[1]
 		as_path := val[2]
 		originatingIP := val[3]
 		pathSlice := strings.Split(as_path, " ")
-		originatingASN, err := strconv.Atoi(pathSlice[len(pathSlice) - 1])
+		originatingASN, err := strconv.Atoi(pathSlice[len(pathSlice)-1])
 		if err != nil {
 			continue
 			//We've hit an AS SET {5400,123} so just skip the line for now
@@ -315,25 +306,25 @@ func (ribHandler *RibHandler) ConsumeRIBFile(postgresConnector *PostgresConnecto
 		}
 		// &models.RIBEntry{prefix,as_path,originatingIP,originatingASN,sourceRIB,originatingDatetime,}
 		var ribRow = &models.RIBEntry{
-			Prefix: prefix,
+			Prefix:               prefix,
 			AutonomousSystemPath: as_path,
-			OriginatingIP: originatingIP,
-			OriginatingASN: originatingASN,
-			SourceRIB: sourceRIB,
-			SourceDatetime: &originatingDatetime,
+			OriginatingIP:        originatingIP,
+			OriginatingASN:       originatingASN,
+			SourceRIB:            sourceRIB,
+			SourceDatetime:       &originatingDatetime,
 		}
 		ribRows = append(ribRows, ribRow)
 		index++
-		if index % 10000 == 0{
-			fmt.Println("Making a Big Insert...")
+		if index%10000 == 0 {
+			ribHandler.l.Println("Making a Big Insert...")
 			ribHandler.BulkInsert(postgresConnector, ribRows)
 			ribRows = ribRows[:0]
-			fmt.Println("Insert Complete...")
+			ribHandler.l.Println("Insert Complete...")
 		}
-    }
+	}
 
-    if err := scanner.Err(); err != nil {
-        log.Fatal(err)
+	if err := scanner.Err(); err != nil {
+		log.Fatal(err)
 	}
 	return err
 }
