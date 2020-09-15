@@ -65,7 +65,11 @@ func (ribHandler *RibHandler) GetRibs() {
 	if err != nil {
 		panic(err)
 	}
-	sem := make(chan struct{}, 10)
+	postgresChan := make(chan string)
+	//Going to start the BGPScanner goroutine as when getFile pushes to channel this goroutine will start running.
+	parseJobChan := make(chan string)
+	//Here I spawn 5 worker tasks
+	ribHandler.createWorkerPool(4, parseJobChan, postgresChan)
 	//it's blocking when getting the files so not the 
 	var wg sync.WaitGroup
 	taskNum := 0 
@@ -73,7 +77,7 @@ func (ribHandler *RibHandler) GetRibs() {
 		wg.Add(1)
 		latestCollection := ribHandler.LatestCollection(collectorName)
 		//ribHandler.l.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
-		go ribHandler.getFile(&wg, collectorName, latestCollection, postgresConnector, sem)
+		go ribHandler.getFile(&wg, collectorName, latestCollection, parseJobChan)
 		taskNum++
 		if i >= 4 {
 			break
@@ -81,11 +85,41 @@ func (ribHandler *RibHandler) GetRibs() {
 		
 	}
 	wg.Wait()
-	ribHandler.l.Printf("[Main] Completed %v Tasks..\n", taskNum)
+	ribHandler.l.Printf("[Main] Wrote %v Tasks..\n", taskNum)
 	//close the channel when all files have been collected as filepaths should have been pushed
+	close(parseJobChan)
 	ribHandler.l.Println("[Main] Done Collecting Files...")
+
+	for {
+		select{
+		    case filepath := <-postgresChan:
+				ribHandler.l.Printf("[Main] Data Recieved %v", filepath)
+				go ribHandler.ConsumeRIBFile(postgresConnector, filepath)
+				<-postgresChan
+			default:
+				ribHandler.l.Println("[Main] Waiting for data for Postgres...")
+				ribHandler.l.Println(len(postgresChan))
+				ribHandler.l.Println(taskNum)
+				time.Sleep(time.Second * 5)
+		}
+	 }
 }
-func (ribHandler *RibHandler) spawnBGPScanner(inputFilepath string, outputFilepath string) {
+func (ribHandler *RibHandler) createWorkerPool(noOfWorkers int, jobChannel chan string, postgresChan chan string) {
+	var wg sync.WaitGroup
+	for i := 0; i < noOfWorkers; i++ {
+		go ribHandler.parseBGPFile(i, &wg, jobChannel, postgresChan)
+	}
+	wg.Add(len(jobChannel))
+	wg.Wait()
+}
+func (ribHandler *RibHandler) parseBGPFile(id int, wg *sync.WaitGroup, jobChannel chan string, postgresChan chan<- string) {
+	for task := range jobChannel {
+		ribHandler.l.Printf("[parseBGPFile] Worker %v Started Job %v\n", id, task)
+		unzippedFile := ribHandler.unzipFile(task)
+		ribHandler.spawnBGPScanner(unzippedFile, fmt.Sprintf("parsed_ribs/%v", strings.Replace(unzippedFile, "ribs/", "", -1)), postgresChan)
+	}
+}
+func (ribHandler *RibHandler) spawnBGPScanner(inputFilepath string, outputFilepath string, postgresChan chan<- string) {
 	ribHandler.l.Printf("[spawnBGPScanner] Spawned a BGP Scanner For %v\n", inputFilepath)
 	cmd := exec.Command("/home/ubuntu/bgpscanner/build/bgpscanner", inputFilepath)
 	cmd.Stderr = os.Stderr
@@ -103,6 +137,8 @@ func (ribHandler *RibHandler) spawnBGPScanner(inputFilepath string, outputFilepa
 		panic(err)
 	}
 	cmd.Wait()
+	postgresChan <- outputFilepath
+	ribHandler.l.Printf("BGP Scanner for %v Complete...\n", inputFilepath)
 
 }
 func (ribHandler *RibHandler) unzipFile(inputFilepath string) string {
@@ -127,12 +163,10 @@ func (ribHandler *RibHandler) unzipFile(inputFilepath string) string {
 	os.Remove(inputFilepath)
 	return out.Name()
 }
-func (ribHandler *RibHandler) getFile(wg *sync.WaitGroup, collectorName string, collectionTime time.Time, postgresConnector *PostgresConnector, sem chan struct{}) {
+func (ribHandler *RibHandler) getFile(wg *sync.WaitGroup, collectorName string, collectionTime time.Time, parseJobChan chan string) {
 	// Get the data
 	//example request http://archive.routeviews.org/route-views.amsix/bgpdata/2020.09/RIBS/rib.20200901.0000.bz2
 	defer wg.Done()
-	sem <- struct{}{}        // grab
-    defer func() { <-sem }() // release
 	ribHandler.l.Printf("[getFile] Collecting %v...\n", collectorName)
 	collectionMonth := collectionTime.Format("2006.01")
 	fileName := fmt.Sprintf("rib.%v.bz2", collectionTime.Format("20060102.1504"))
@@ -161,10 +195,7 @@ func (ribHandler *RibHandler) getFile(wg *sync.WaitGroup, collectorName string, 
 		if err != nil {
 			ribHandler.l.Println(err)
 		}
-		ribHandler.l.Printf("[getFile] Starting Parsing of %v", filepath)
-		unzippedFile := ribHandler.unzipFile(filepath)
-		ribHandler.spawnBGPScanner(unzippedFile, fmt.Sprintf("parsed_ribs/%v", strings.Replace(unzippedFile, "ribs/", "", -1)))
-		ribHandler.ConsumeRIBFile(postgresConnector, fmt.Sprintf("parsed_ribs/%v", strings.Replace(unzippedFile, "ribs/", "", -1)))
+		parseJobChan <- filepath
 	}
 	
 }
@@ -254,7 +285,7 @@ func (ribHandler *RibHandler) ConsumeRIBFile(postgresConnector *PostgresConnecto
 	//open the file
 	//after 10000 lines have been batched send the statement
 	//loop until finished
-	ribHandler.l.Println("Created a Postgres Consumer for %v", filename)
+	ribHandler.l.Printf("Created a Postgres Consumer for %v\n", filename)
 	var ribRows []*models.RIBEntry = nil
 	datetimeLayout := "20060102.1504"
 	file, err := os.Open(filename)
