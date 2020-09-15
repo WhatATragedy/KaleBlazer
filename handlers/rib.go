@@ -59,7 +59,10 @@ func (ribHandler *RibHandler) connectPostgres(l *log.Logger) *PostgresConnector 
 func (ribHandler *RibHandler) GetRibs(){
 	ribHandler.GetCollectors()
 	fmt.Println("Finished Getting Collectors")
+	postgresConnector := ribHandler.connectPostgres(ribHandler.l)
+	ribHandler.createPostgresTable(postgresConnector)
 	var wg sync.WaitGroup
+	compChan := make(chan string)
 	for i, collectorName := range ribHandler.collectors {
 		wg.Add(1)
 		latestCollection := ribHandler.LatestCollection(collectorName)
@@ -75,13 +78,14 @@ func (ribHandler *RibHandler) GetRibs(){
 	ribHandler.unzipFiles("ribs/")
 	fmt.Println("Directory Unzipped")
 	fmt.Println("Init BGP Scanner")
-	ribHandler.collectBGPScanner("ribs/")
-	fmt.Println("Done.")
-	postgresConnector := ribHandler.connectPostgres(ribHandler.l)
-	ribHandler.createPostgresTable(postgresConnector)
-	ribHandler.ConsumeRIBFile(postgresConnector, "/home/ubuntu/go/src/ribSnatcher/parsed_ribs/route-views.amsix-rib.20200904.1600")
+	ribHandler.collectBGPScanner("ribs/", compChan)
+	fmt.Println("Done Parsing..")
+	fmt.Println("Sending to Postgres")
+	for elem := range compChan {
+		ribHandler.ConsumeRIBFile(postgresConnector, elem)
+	}
 }
-func (ribHandler *RibHandler) collectBGPScanner(inputDirectory string) {
+func (ribHandler *RibHandler) collectBGPScanner(inputDirectory string, completedChannel chan string) {
 	fmt.Println("Collecting BPG Scanner Tasks")
 	files, err := ioutil.ReadDir(inputDirectory)
 	if err != nil {
@@ -90,11 +94,11 @@ func (ribHandler *RibHandler) collectBGPScanner(inputDirectory string) {
 	var wg sync.WaitGroup
     for _, f := range files {
 		wg.Add(1)
-		go ribHandler.spawnBGPScanner(&wg, fmt.Sprintf("%v%v", inputDirectory, f.Name()), fmt.Sprintf("parsed_ribs/%v", f.Name()))
+		go ribHandler.spawnBGPScanner(&wg, fmt.Sprintf("%v%v", inputDirectory, f.Name()), fmt.Sprintf("parsed_ribs/%v", f.Name()), completedChannel)
 	}
 	wg.Wait()
 }
-func (ribHandler *RibHandler) spawnBGPScanner(wg *sync.WaitGroup, inputFilepath string, outputFilepath string){
+func (ribHandler *RibHandler) spawnBGPScanner(wg *sync.WaitGroup, inputFilepath string, outputFilepath string, completedChannel chan string){
 	defer wg.Done()
 	fmt.Println("Spawned a BGP Scanner...")
 	cmd := exec.Command("/home/ubuntu/bgpscanner/build/bgpscanner", inputFilepath)
@@ -109,7 +113,9 @@ func (ribHandler *RibHandler) spawnBGPScanner(wg *sync.WaitGroup, inputFilepath 
     err = cmd.Start(); if err != nil {
         panic(err)
     }
-    cmd.Wait()
+	cmd.Wait()
+	completedChannel <- inputFilepath
+	
 }
 func (ribHandler *RibHandler) unzipFile(wg *sync.WaitGroup, outDir string, inputFilepath string) {
 	//TODO Remove the old bzip file when done
