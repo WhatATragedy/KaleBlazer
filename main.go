@@ -9,7 +9,7 @@ package main
 
 import (
 	"log"
-	"kaleblazer/handlers"
+	"kaleblazerReborn/handlers"
 	"os"
 )
 

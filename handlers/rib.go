@@ -48,7 +48,6 @@ func (ribHandler *RibHandler) createPostgresTable(postgresConnector *PostgresCon
 	`
 	_, err := postgresConnector.db.Exec(sqlStatement)
 	if err != nil {
-		panic(err)
 		return err
 	}
 	return err
@@ -58,55 +57,41 @@ func (ribHandler *RibHandler) connectPostgres(l *log.Logger) *PostgresConnector 
 	return postgresConnector
 }
 func (ribHandler *RibHandler) GetRibs() {
+	ribHandler.l.Println("[Main] Welcome To Kale Blazer Reborn...")
 	ribHandler.GetCollectors()
-	ribHandler.l.Println("Finished Getting Collectors")
+	ribHandler.l.Println("[Main] Finished Getting Collectors")
 	postgresConnector := ribHandler.connectPostgres(ribHandler.l)
-	ribHandler.createPostgresTable(postgresConnector)
-	postgresChan := make(chan string)
-	//Going to start the BGPScanner goroutine as when getFile pushes to channel this goroutine will start running.
-	parseJobChan := make(chan string)
-	//Here I spawn 5 worker tasks
-	ribHandler.createWorkerPool(5, parseJobChan, postgresChan)
+	err := ribHandler.createPostgresTable(postgresConnector)
+	if err != nil {
+		panic(err)
+	}
+	sem := make(chan struct{}, 10)
+	//it's blocking when getting the files so not the 
 	var wg sync.WaitGroup
+	taskNum := 0 
 	for i, collectorName := range ribHandler.collectors {
+		wg.Add(1)
 		latestCollection := ribHandler.LatestCollection(collectorName)
-		ribHandler.l.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
-		go ribHandler.getFile(&wg, collectorName, latestCollection, parseJobChan)
-		if i > 5 {
+		//ribHandler.l.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
+		go ribHandler.getFile(&wg, collectorName, latestCollection, postgresConnector, sem)
+		taskNum++
+		if i >= 4 {
 			break
 		}
+		
 	}
 	wg.Wait()
-	ribHandler.l.Printf("Wrote %v Tasks..\n", i)
+	ribHandler.l.Printf("[Main] Completed %v Tasks..\n", taskNum)
 	//close the channel when all files have been collected as filepaths should have been pushed
-	close(parseJobChan)
-	ribHandler.l.Println("Done Collecting Files...")
-
-	for elem := range compChan {
-		ribHandler.ConsumeRIBFile(postgresConnector, elem)
-	}
+	ribHandler.l.Println("[Main] Done Collecting Files...")
 }
-func (ribHandler *RibHandler) createWorkerPool(noOfWorkers int, jobChannel chan string, postgresChan chan string) {
-	var wg sync.WaitGroup
-	for i := 0; i < noOfWorkers; i++ {
-		go parseBGPFile(i, &wg, jobChannel, postgresChan)
-	}
-	wg.Add(len(jobChannel))
-	wg.Wait()
-}
-func (ribHandler *RibHandler) parseBGPFile(id int, wg *sync.WaitGroup, jobChannel <-chan string, postgresChan chan<- string) {
-	for task := range jobChannel {
-		ribHandler.l.Printf("Worker %v Started Job %v\n", id, task)
-		unzippedFile := ribHandler.unzipFile(task)
-		ribHandler.spawnBGPScanner(unzippedFile, fmt.Sprintf("parsed_ribs/%v", unzippedFile), postgresChan)
-	}
-}
-func (ribHandler *RibHandler) spawnBGPScanner(inputFilepath string, outputFilepath string, postgresChan chan string) {
-	ribHandler.l.Printf("Spawned a BGP Scanner For %v\n", inputFilepath)
+func (ribHandler *RibHandler) spawnBGPScanner(inputFilepath string, outputFilepath string) {
+	ribHandler.l.Printf("[spawnBGPScanner] Spawned a BGP Scanner For %v\n", inputFilepath)
 	cmd := exec.Command("/home/ubuntu/bgpscanner/build/bgpscanner", inputFilepath)
 	cmd.Stderr = os.Stderr
 	outfile, err := os.Create(outputFilepath)
 	if err != nil {
+		ribHandler.l.Println("Error Creating Output Path for BGPScanner...")
 		panic(err)
 	}
 	defer outfile.Close()
@@ -114,19 +99,20 @@ func (ribHandler *RibHandler) spawnBGPScanner(inputFilepath string, outputFilepa
 
 	err = cmd.Start()
 	if err != nil {
+		ribHandler.l.Println("BGPScanner encountered and Error When Running...")
 		panic(err)
 	}
 	cmd.Wait()
-	postgresChan <- outputFilepath
 
 }
 func (ribHandler *RibHandler) unzipFile(inputFilepath string) string {
-	//TODO Remove the old bzip file when done
+	ribHandler.l.Printf("[unzipFile] Spawned an Unzip Goroutine For %v\n", inputFilepath)
 	inputFile, err := os.OpenFile(inputFilepath, 0, 0)
 	if err != nil {
+		ribHandler.l.Println("[unzipFile] Unzip Encountered Error Opening Zip File...")
 		panic(err)
 	}
-	ribHandler.l.Println(inputFilepath)
+	//ribHandler.l.Println(inputFilepath)
 	inputReader := bzip2.NewReader(inputFile)
 	out, err := os.Create(strings.Replace(inputFilepath, ".bz2", "", -1))
 	if err != nil {
@@ -139,15 +125,18 @@ func (ribHandler *RibHandler) unzipFile(inputFilepath string) string {
 		ribHandler.l.Println(err)
 	}
 	os.Remove(inputFilepath)
-	return out
+	return out.Name()
 }
-func (ribHandler *RibHandler) getFile(wg *sync.WaitGroup, collectorName string, collectionTime time.Time, collectedFileChan chan string) {
+func (ribHandler *RibHandler) getFile(wg *sync.WaitGroup, collectorName string, collectionTime time.Time, postgresConnector *PostgresConnector, sem chan struct{}) {
 	// Get the data
 	//example request http://archive.routeviews.org/route-views.amsix/bgpdata/2020.09/RIBS/rib.20200901.0000.bz2
-	ribHandler.l.Printf("Collecting %v...\n", collectorName)
+	defer wg.Done()
+	sem <- struct{}{}        // grab
+    defer func() { <-sem }() // release
+	ribHandler.l.Printf("[getFile] Collecting %v...\n", collectorName)
 	collectionMonth := collectionTime.Format("2006.01")
-	fileName := ribHandler.l.Sprintf("rib.%v.bz2", collectionTime.Format("20060102.1504"))
-	fullURL := ribHandler.l.Sprintf("%v%v/bgpdata/%v/RIBS/%v",
+	fileName := fmt.Sprintf("rib.%v.bz2", collectionTime.Format("20060102.1504"))
+	fullURL := fmt.Sprintf("%v%v/bgpdata/%v/RIBS/%v",
 		ribHandler.archiveURL,
 		collectorName,
 		collectionMonth,
@@ -156,28 +145,35 @@ func (ribHandler *RibHandler) getFile(wg *sync.WaitGroup, collectorName string, 
 	resp, err := http.Get(fullURL)
 	if err != nil {
 		ribHandler.l.Println(err)
+	} else if resp.StatusCode != 200 {
+		ribHandler.l.Printf("Error Collecting %v, status code %v...", collectorName, resp.StatusCode)
+	} else {
+		defer resp.Body.Close()
+		// Create the file
+		filepath := fmt.Sprintf("ribs/%v-%v", collectorName, fileName)
+		out, err := os.Create(filepath)
+		if err != nil {
+			ribHandler.l.Println(err)
+		}
+		defer out.Close()
+		// Write the body to file
+		_, err = io.Copy(out, resp.Body)
+		if err != nil {
+			ribHandler.l.Println(err)
+		}
+		ribHandler.l.Printf("[getFile] Starting Parsing of %v", filepath)
+		unzippedFile := ribHandler.unzipFile(filepath)
+		ribHandler.spawnBGPScanner(unzippedFile, fmt.Sprintf("parsed_ribs/%v", strings.Replace(unzippedFile, "ribs/", "", -1)))
+		ribHandler.ConsumeRIBFile(postgresConnector, fmt.Sprintf("parsed_ribs/%v", strings.Replace(unzippedFile, "ribs/", "", -1)))
 	}
-	defer resp.Body.Close()
-	// Create the file
-	filepath := ribHandler.l.Sprintf("ribs/%v-%v", collectorName, fileName)
-	out, err := os.Create(filepath)
-	if err != nil {
-		ribHandler.l.Println(err)
-	}
-	defer out.Close()
-	// Write the body to file
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
-		ribHandler.l.Println(err)
-	}
-	completedFileChan <- filepath
+	
 }
 func (ribHandler *RibHandler) LatestCollection(collectorName string) time.Time {
 	//example url http://archive.routeviews.org/route-views.amsix/bgpdata/2020.09/RIBS/rib.20200901.0000.bz2
 	layout := "20060102.1504"
 	latestCollectionMonth := ribHandler.LatestMonth(collectorName)
 	collectorDates := []time.Time{}
-	url := ribHandler.l.Sprintf("%v%v/bgpdata/%v/RIBS/", ribHandler.archiveURL, collectorName, ribHandler.l.Sprintf(latestCollectionMonth.Format("2006.01")))
+	url := fmt.Sprintf("%v%v/bgpdata/%v/RIBS/", ribHandler.archiveURL, collectorName, fmt.Sprintf(latestCollectionMonth.Format("2006.01")))
 	c := colly.NewCollector()
 	// On every a element which has href attribute call callback
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
@@ -200,7 +196,7 @@ func (ribHandler *RibHandler) LatestCollection(collectorName string) time.Time {
 func (ribHandler *RibHandler) LatestMonth(collectorName string) time.Time {
 	layout := "2006.01"
 	collectorDates := []time.Time{}
-	url := ribHandler.l.Sprintf("%v%v/bgpdata/", ribHandler.archiveURL, collectorName)
+	url := fmt.Sprintf("%v%v/bgpdata/", ribHandler.archiveURL, collectorName)
 	c := colly.NewCollector()
 	// On every a element which has href attribute call callback
 	c.OnHTML("a[href]", func(e *colly.HTMLElement) {
@@ -244,12 +240,12 @@ func (ribHandler *RibHandler) GetCollectors() []string {
 		})
 	})
 	// Before making a request print "Visiting ..."
-	c.OnRequest(func(r *colly.Request) {
-		ribHandler.l.Println("Visiting", ribHandler.collectorURL)
-	})
-	c.OnResponse(func(r *colly.Response) {
-		ribHandler.l.Println("Visited", r.Request.URL)
-	})
+	// c.OnRequest(func(r *colly.Request) {
+	// 	ribHandler.l.Println("Visiting", ribHandler.collectorURL)
+	// })
+	// c.OnResponse(func(r *colly.Response) {
+	// 	ribHandler.l.Println("Visited", r.Request.URL)
+	// })
 	c.Visit(ribHandler.collectorURL)
 	ribHandler.collectors = collectors
 	return collectors
@@ -258,25 +254,45 @@ func (ribHandler *RibHandler) ConsumeRIBFile(postgresConnector *PostgresConnecto
 	//open the file
 	//after 10000 lines have been batched send the statement
 	//loop until finished
+	ribHandler.l.Println("Created a Postgres Consumer for %v", filename)
 	var ribRows []*models.RIBEntry = nil
 	datetimeLayout := "20060102.1504"
 	file, err := os.Open(filename)
 	if err != nil {
-		log.Fatal(err)
+		ribHandler.l.Println("[ConsumeRIBFile] Encountered Error While Opening File...")
+		panic(err)
 	}
 	defer file.Close()
 	fileVals := strings.Split(filename, "/")
 	sourceFile := fileVals[len(fileVals)-1]
 	//datetime and source rib from the filename
+	// ribHandler.l.Println(fileVals)
+	// ribHandler.l.Println(sourceFile)
 	tempSlice := strings.Split(sourceFile, ".")
-	nameSlice := tempSlice[0:2]
-	datetimeSlice := tempSlice[2:4]
-	// ribHandler.l.Println(nameSlice)
-	// ribHandler.l.Println(datetimeSlice)
-	sourceRIB := strings.Join(nameSlice, ".")
+	var datetimeSlice []string
+	var sourceRIB string
+	if len(tempSlice) == 4 {
+		//this is the routeviews.amsix.date.time
+		sourceRIBSlice := tempSlice[0:2]
+		datetimeSlice = tempSlice[2:4]
+		sourceRIB = strings.Join(sourceRIBSlice, ".")
+	} else if len(tempSlice) == 3{
+		sourceRIB = tempSlice[0]
+		datetimeSlice = tempSlice[1:3]
+	} else {
+		ribHandler.l.Println("Error Parsing File Name For Postgres Conumser...")
+		//I should return an err here
+		return nil
+	}
+	// ribHandler.l.Println(tempSlice)
+
+	// ribHandler.l.Println(len(tempSlice))
+	
 	originatingDatetimeString := strings.Join(datetimeSlice, ".")
+	ribHandler.l.Println(originatingDatetimeString)
 	originatingDatetime, err := time.Parse(datetimeLayout, originatingDatetimeString)
 	if err != nil {
+		ribHandler.l.Println("[ConsumeRIBFile] Encountered Error Parsing Datetime...")
 		panic(err)
 	}
 	scanner := bufio.NewScanner(file)
@@ -316,25 +332,26 @@ func (ribHandler *RibHandler) ConsumeRIBFile(postgresConnector *PostgresConnecto
 		ribRows = append(ribRows, ribRow)
 		index++
 		if index%10000 == 0 {
-			ribHandler.l.Println("Making a Big Insert...")
+			// ribHandler.l.Println("Making a Big Insert...")
 			ribHandler.BulkInsert(postgresConnector, ribRows)
 			ribRows = ribRows[:0]
-			ribHandler.l.Println("Insert Complete...")
+			// ribHandler.l.Println("Insert Complete...")
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
+		ribHandler.l.Fatal(err)
 	}
 	return err
 }
 func (ribHandler *RibHandler) BulkInsert(postgresConnector *PostgresConnector, ribRows []*models.RIBEntry) error {
 	txn, err := postgresConnector.db.Begin()
 	if err != nil {
-		log.Fatal(err)
+		ribHandler.l.Fatal(err)
 	}
 	stmt, err := txn.Prepare(pq.CopyIn("ribs", "prefix", "aspath", "originatingip", "originatingasn", "sourcerib", "originatingdatetime"))
 	if err != nil {
+		ribHandler.l.Println("[BulkInsert] Encountered Error while preparing Postgres Transaction...")
 		panic(err)
 	}
 	for _, post := range ribRows {
@@ -347,20 +364,21 @@ func (ribHandler *RibHandler) BulkInsert(postgresConnector *PostgresConnector, r
 			post.SourceDatetime,
 		)
 		if err != nil {
+			ribHandler.l.Println("[BulkInsert] Encountered Error while executing transaction...")
 			panic(err)
 		}
 	}
 	_, err = stmt.Exec()
 	if err != nil {
-		log.Fatal(err)
+		ribHandler.l.Fatal(err)
 	}
 	err = stmt.Close()
 	if err != nil {
-		log.Fatal(err)
+		ribHandler.l.Fatal(err)
 	}
 	err = txn.Commit()
 	if err != nil {
-		log.Fatal(err)
+		ribHandler.l.Fatal(err)
 	}
 	return err
 }
