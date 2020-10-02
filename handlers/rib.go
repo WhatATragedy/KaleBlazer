@@ -38,9 +38,9 @@ func (ribHandler *RibHandler) createPostgresTable(postgresConnector *PostgresCon
 	//change aspath to an arry of ints
 	//pay_by_quarter  integer[],
 	sqlStatement := `
-	DROP TABLE IF EXISTS ribs; CREATE UNLOGGED TABLE ribs (
+    DROP TABLE IF EXISTS ribs; CREATE UNLOGGED TABLE ribs (
 		Prefix INET,
-		ASPath TEXT,
+		ASPath bigint[],
 		OriginatingIP INET,
 		OriginatingASN bigint,
 		SourceRIB TEXT,
@@ -69,7 +69,19 @@ func (ribHandler *RibHandler) createPostgresTable(postgresConnector *PostgresCon
 	CREATE TABLE records_10000 PARTITION OF ribs
 			FOR VALUES FROM (10000) TO (11000);
 	CREATE TABLE records_11000 PARTITION OF ribs
-            FOR VALUES FROM (11000) TO (9223372036854775807);
+			FOR VALUES FROM (11000) TO (12000);
+	CREATE TABLE records_12000 PARTITION OF ribs
+			FOR VALUES FROM (12000) TO (13000);
+	CREATE TABLE records_13000 PARTITION OF ribs
+			FOR VALUES FROM (13000) TO (14000);
+	CREATE TABLE records_14000 PARTITION OF ribs
+			FOR VALUES FROM (14000) TO (15000);
+	CREATE TABLE records_15000 PARTITION OF ribs
+			FOR VALUES FROM (15000) TO (16000);
+	CREATE TABLE records_16000 PARTITION OF ribs
+			FOR VALUES FROM (16000) TO (17000);
+	CREATE TABLE records_17000 PARTITION OF ribs
+			FOR VALUES FROM (17000) TO (9223372036854775807);
 	`
 	_, err := postgresConnector.db.Exec(sqlStatement)
 	if err != nil {
