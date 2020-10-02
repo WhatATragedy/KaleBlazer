@@ -35,16 +35,41 @@ func NewRibHandler(l *log.Logger) *RibHandler {
 	}
 }
 func (ribHandler *RibHandler) createPostgresTable(postgresConnector *PostgresConnector) error {
+	//change aspath to an arry of ints
+	//pay_by_quarter  integer[],
 	sqlStatement := `
-	DROP TABLE IF EXISTS ribs; CREATE TABLE ribs (
-		id SERIAL PRIMARY KEY,
+	DROP TABLE IF EXISTS ribs; CREATE UNLOGGED TABLE ribs (
 		Prefix INET,
 		ASPath TEXT,
 		OriginatingIP INET,
 		OriginatingASN bigint,
 		SourceRIB TEXT,
 		OriginatingDatetime TIMESTAMP
-	)
+	) PARTITION BY RANGE ( originatingasn );
+	CREATE TABLE records_0 PARTITION OF ribs
+			FOR VALUES FROM (0) TO (1000);
+	CREATE TABLE records_1000 PARTITION OF ribs
+			FOR VALUES FROM (1000) TO (2000);
+	CREATE TABLE records_2000 PARTITION OF ribs
+			FOR VALUES FROM (2000) TO (3000);
+	CREATE TABLE records_3000 PARTITION OF ribs
+			FOR VALUES FROM (3000) TO (4000);
+	CREATE TABLE records_4000 PARTITION OF ribs
+			FOR VALUES FROM (4000) TO (5000);
+	CREATE TABLE records_5000 PARTITION OF ribs
+			FOR VALUES FROM (5000) TO (6000);
+	CREATE TABLE records_6000 PARTITION OF ribs
+			FOR VALUES FROM (6000) TO (7000);
+	CREATE TABLE records_7000 PARTITION OF ribs
+			FOR VALUES FROM (7000) TO (8000);
+	CREATE TABLE records_8000 PARTITION OF ribs
+			FOR VALUES FROM (8000) TO (9000);
+	CREATE TABLE records_9000 PARTITION OF ribs
+			FOR VALUES FROM (9000) TO (10000);
+	CREATE TABLE records_10000 PARTITION OF ribs
+			FOR VALUES FROM (10000) TO (11000);
+	CREATE TABLE records_11000 PARTITION OF ribs
+            FOR VALUES FROM (11000) TO (9223372036854775807);
 	`
 	_, err := postgresConnector.db.Exec(sqlStatement)
 	if err != nil {
@@ -69,15 +94,15 @@ func (ribHandler *RibHandler) GetRibs() {
 	//it's blocking when getting the files so not the 
 	var wg sync.WaitGroup
 	taskNum := 0 
-	for _, collectorName := range ribHandler.collectors {
+	for i, collectorName := range ribHandler.collectors {
 		wg.Add(1)
 		latestCollection := ribHandler.LatestCollection(collectorName)
 		//ribHandler.l.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
 		go ribHandler.getFile(&wg, collectorName, latestCollection, postgresConnector, sem)
 		taskNum++
-		// if i >= 4 {
-		// 	break
-		// }
+		if i >= 4 {
+			break
+		}
 		
 	}
 	wg.Wait()
@@ -363,6 +388,7 @@ func (ribHandler *RibHandler) BulkInsert(postgresConnector *PostgresConnector, r
 			post.SourceRIB,
 			post.SourceDatetime,
 		)
+		// ribHandler.l.Println(post.Prefix,post.AutonomousSystemPath,post.OriginatingIP,post.OriginatingASN,post.SourceRIB,post.SourceDatetime)
 		if err != nil {
 			ribHandler.l.Println("[BulkInsert] Encountered Error while executing transaction...")
 			panic(err)

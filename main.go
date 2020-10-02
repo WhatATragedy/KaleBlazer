@@ -16,12 +16,12 @@ import (
 func main() {
 	l := log.New(os.Stdout, "Kale-Blazer ", log.LstdFlags)
 	//asNames := handlers.NewASNamesHandler(l)
-	_, err := handlers.GetASNames(l)
-	if err != nil {
-		panic(err)
-	}
-	tals := handlers.NewTalHandler(l)
-	tals.ConsumeTals([]string{}, nil)
+	// _, err := handlers.GetASNames(l)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// tals := handlers.NewTalHandler(l)
+	// tals.ConsumeTals([]string{}, nil)
 	rib := handlers.NewRibHandler(l)
 	rib.GetRibs()
 }
