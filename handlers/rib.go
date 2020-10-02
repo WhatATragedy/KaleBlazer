@@ -69,15 +69,15 @@ func (ribHandler *RibHandler) GetRibs() {
 	//it's blocking when getting the files so not the 
 	var wg sync.WaitGroup
 	taskNum := 0 
-	for i, collectorName := range ribHandler.collectors {
+	for _, collectorName := range ribHandler.collectors {
 		wg.Add(1)
 		latestCollection := ribHandler.LatestCollection(collectorName)
 		//ribHandler.l.Printf("%v Latest Collection %v\n", collectorName, latestCollection)
 		go ribHandler.getFile(&wg, collectorName, latestCollection, postgresConnector, sem)
 		taskNum++
-		if i >= 4 {
-			break
-		}
+		// if i >= 4 {
+		// 	break
+		// }
 		
 	}
 	wg.Wait()

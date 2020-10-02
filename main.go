@@ -15,8 +15,6 @@ import (
 
 func main() {
 	l := log.New(os.Stdout, "Kale-Blazer ", log.LstdFlags)
-	rib := handlers.NewRibHandler(l)
-	rib.GetRibs()
 	//asNames := handlers.NewASNamesHandler(l)
 	_, err := handlers.GetASNames(l)
 	if err != nil {
@@ -24,5 +22,7 @@ func main() {
 	}
 	tals := handlers.NewTalHandler(l)
 	tals.ConsumeTals([]string{}, nil)
+	rib := handlers.NewRibHandler(l)
+	rib.GetRibs()
 }
 //todo add function to list directory and return a slice of files
