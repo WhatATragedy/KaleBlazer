@@ -82,11 +82,11 @@ func connectPostgres(l *log.Logger) *PostgresConnector {
 }
 func createPostgresTable(postgresConnector *PostgresConnector) error {
 	sqlStatement := `
-	DROP TABLE IF EXISTS asnames; CREATE TABLE asnames (
+	DROP TABLE IF EXISTS as_names; CREATE TABLE as_names (
 		Id SERIAL PRIMARY KEY,
 		ASN bigint NOT NULL,
 		Name TEXT,
-		cc TEXT
+		Country TEXT
 	)
 	`
 	_, err := postgresConnector.db.Exec(sqlStatement)
@@ -101,7 +101,7 @@ func recordsToPostgres(postgresConnector *PostgresConnector, ASNameData []*model
 	if err != nil {
 		log.Fatal(err)
 	}
-	stmt, err := txn.Prepare(pq.CopyIn("asnames", "asn", "name", "cc"))
+	stmt, err := txn.Prepare(pq.CopyIn("as_names", "asn", "name", "country"))
 	if err != nil {
 		panic(err)
 	}

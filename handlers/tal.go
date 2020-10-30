@@ -1,30 +1,39 @@
 package handlers
+
 import (
-	"log"
-	"time"
-	"github.com/gocolly/colly"
-	"fmt"
-	"strings"
-	"net/http"
-	"kaleblazer/models"
 	"bufio"
+	"fmt"
+	"kaleblazer/models"
+	"log"
+	"net/http"
 	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gocolly/colly"
 	"github.com/lib/pq"
 )
+
 type TalHandler struct {
-	l *log.Logger
+	l            *log.Logger
 	talDirectory string
-	regions []string
+	regions      []string
 }
+
 func NewTalHandler(l *log.Logger) *TalHandler {
 	return &TalHandler{
-		l: l,
+		l:            l,
 		talDirectory: "https://ftp.ripe.net/rpki/",
 	}
 }
-func (talHandler *TalHandler) ConsumeTals(regions []string, date *time.Time){
+func (talHandler *TalHandler) ConsumeTals(regions []string, date *time.Time) {
 	//example TAL request https://ftp.ripe.net/ripe/rpki/afrinic.tal/2020/09/08/roas.csv
 	fmt.Println("Consuming TALs...")
+	postgresConnector := talHandler.connectPostgres(talHandler.l)
+	err := talHandler.createPostgresTable(postgresConnector)
+	if err != nil {
+		fmt.Println("AHhhhhh")
+	}
 	if len(regions) == 0 {
 		//All Regions
 		talHandler.regions = talHandler.GetTalRegions()
@@ -32,28 +41,28 @@ func (talHandler *TalHandler) ConsumeTals(regions []string, date *time.Time){
 	if date == nil {
 		//don't check the dates as don't care
 	}
+	fmt.Println(talHandler.regions)
 	//probably worth checking here that the date is valid but just get yesterdays date for now.
 	layout := "2006/01/02"
 	dt := time.Now()
 	dtFormatted := dt.Format(layout)
 	fmt.Println("About to Loop")
 	for _, region := range talHandler.regions {
-		fmt.Println(region)
 		fullURL := fmt.Sprintf("%v%v%v/roas.csv", talHandler.talDirectory, region, dtFormatted)
-		fmt.Println(fullURL)
 		talHandler.consumeTal(fullURL, strings.Trim(region, "/"), &dt)
 
 	}
 }
-func (talHandler *TalHandler) consumeTal(fullURL string, sourceTAL string, sourceDate *time.Time){
+func (talHandler *TalHandler) consumeTal(fullURL string, sourceTAL string, sourceDate *time.Time) {
 	//var talEntries []*models.TALEntry
 	_, err := talHandler.getTal(fullURL, sourceTAL, sourceDate)
-	if err!= nil {
+	if err != nil {
 		panic(err)
 	}
-	
+
 }
 func (talHandler *TalHandler) getTal(fullURL string, sourceTAL string, sourceDate *time.Time) ([]*models.TALEntry, error) {
+	fmt.Printf("Requesting Tal For %v\n", sourceTAL)
 	var TALVals []*models.TALEntry
 	resp, err := http.Get(fullURL)
 	if err != nil {
@@ -72,14 +81,12 @@ func (talHandler *TalHandler) getTal(fullURL string, sourceTAL string, sourceDat
 			tal.SourceDate = sourceDate
 			TALVals = append(TALVals, tal)
 		}
-
 	}
 	if err := s.Err(); err != nil {
 		// handle error
 		panic(err)
 	}
 	postgresConnector := talHandler.connectPostgres(talHandler.l)
-	err = talHandler.createPostgresTable(postgresConnector)
 	if err != nil {
 		panic(err)
 	}
@@ -124,7 +131,7 @@ func (talHandler *TalHandler) recordsToPostgres(postgresConnector *PostgresConne
 func (talHandler *TalHandler) parseTalLine(line string) *models.TALEntry {
 	layout := "2006-01-02 15:04:05"
 	vals := strings.Split(line, ",")
-	if len(vals) != 6{
+	if len(vals) != 6 {
 		return nil
 	} else {
 		asn, err := strconv.Atoi(strings.Trim(vals[1], "AS"))
@@ -135,13 +142,13 @@ func (talHandler *TalHandler) parseTalLine(line string) *models.TALEntry {
 		validFrom := vals[4]
 		t, err := time.Parse(layout, validFrom)
 		tal := models.TALEntry{
-			Prefix: prefix,
+			Prefix:           prefix,
 			AutonomousSystem: asn,
-			ValidFrom: &t,
+			ValidFrom:        &t,
 		}
 		return &tal
 	}
-	
+
 }
 func (talHandler *TalHandler) GetTalRegions() []string {
 	//TODO Scrape the RPKI page for a list of TAL regions
@@ -152,15 +159,12 @@ func (talHandler *TalHandler) GetTalRegions() []string {
 		if strings.Contains(e.Text, "tal") && e.Text != " " {
 			talRegions = append(talRegions, strings.Trim(e.Text, " "))
 		}
-		
+
 	})
 	c.Visit(talHandler.talDirectory)
 	fmt.Println(talRegions)
 	talHandler.regions = talRegions
 	return talRegions
-}
-func (talHandler *TalHandler) getMostRecentDate(){
-
 }
 func (talHandler *TalHandler) createPostgresTable(postgresConnector *PostgresConnector) error {
 	sqlStatement := `
